@@ -23,5 +23,6 @@ main(int argc, char *argv[])
     nargv[i-2] = argv[i];
   }
   exec(nargv[0], nargv);
+  wait(0);
   exit(0);
 }
