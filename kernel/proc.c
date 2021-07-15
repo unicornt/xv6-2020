@@ -20,10 +20,11 @@ static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
+extern pagetable_t kernel_pagetable;
 
 // initialize the proc table at boot time.
 void
-procinit(void)
+procinit()
 {
   struct proc *p;
   
@@ -34,14 +35,14 @@ procinit(void)
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+      // char *pa = kalloc();
+      // if(pa == 0)
+      //   panic("kalloc");
+      // uint64 va = KSTACK((int) (p - proc));
+      // kvmmap(p->kpg, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      // p->kstack = va;
   }
-  kvminithart();
+  // kvminithart(kernel_pagetable);
 }
 
 // Must be called with interrupts disabled,
@@ -121,6 +122,12 @@ found:
     return 0;
   }
 
+  p->kpg = kvminit_proc();
+  char *pa = kalloc();
+  uint64 va = KSTACK(0);
+  mappages(p->kpg, va, PGSIZE, (uint64)pa, PTE_R | PTE_W);
+  p->kstack = va;
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -139,9 +146,15 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  if(p->kstack)
+	  uvmunmap(p->kpg, p->kstack, 1, 1);
+  if(p->kpg)
+    proc_freekpagetable(p->kpg);
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  p->kstack = 0;
   p->pagetable = 0;
+  p->kpg = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -195,6 +208,27 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmfree(pagetable, sz);
 }
 
+extern char etext[];  // kernel.ld sets this to end of kernel code.
+// Free a process's kernel page table, but don't free the
+// physical memory it refers to.
+void
+proc_freekpagetable(pagetable_t pagetable)
+{
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if (pte & PTE_V){
+      pagetable[i] = 0;
+      if ((pte & (PTE_R|PTE_W|PTE_X)) == 0) {
+        uint64 child = PTE2PA(pte);
+        proc_freekpagetable((pagetable_t)child);
+      }
+    } else if(pte & PTE_V){
+        panic("kvmfree: leaf");
+    }
+  }
+  kfree((void*)pagetable);
+}
+
 // a user program that calls exec("/init")
 // od -t xC initcode
 uchar initcode[] = {
@@ -220,6 +254,8 @@ userinit(void)
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+
+  kvmmapuser(p->kpg, p->pagetable, 0, p->sz);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -273,6 +309,9 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+
+  kvmmapuser(np->kpg, np->pagetable, 0, p->sz);
+
   np->sz = p->sz;
 
   np->parent = p;
@@ -463,17 +502,22 @@ scheduler(void)
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
+    // printf("sched\n");
     
     int found = 0;
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
+        // printf("RUNNABLE\n");
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        w_satp(MAKE_SATP(p->kpg));
+        sfence_vma();
         swtch(&c->context, &p->context);
+        kvminithart();
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
