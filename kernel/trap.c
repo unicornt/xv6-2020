@@ -37,6 +37,8 @@ void
 usertrap(void)
 {
   int which_dev = 0;
+  char *mem;
+  uint64 va;
 
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
@@ -67,7 +69,34 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } else if(r_scause() == 15 || r_scause() == 13){
+    // page fault
+    va = PGROUNDDOWN(r_stval());
+    if(va >= p->sz || va < p->trapframe->sp){
+      // printf("usertrap(): scause %p pid=%d invalid va %p\n", r_scause(), p->pid, va);
+      // printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
+    else {
+      // printf("OK\n");
+      mem = kalloc();
+      if(mem == 0){
+        // printf("usertrap(): scause %p pid=%d\n kalloc failed", r_scause(), p->pid);
+        // printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+        p->killed = 1;
+      }
+      else{
+        memset(mem, 0, PGSIZE);
+        if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+          kfree(mem);
+          // printf("usertrap(): scause %p pid=%d mappages failed\n", r_scause(), p->pid);
+          // printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+          p->killed = 1;
+        }
+      }
+    }
+  }
+  else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
@@ -77,8 +106,20 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2){
+    if(p->ticks != 0){
+      p->tick_cnt++;
+      if(p->tick_cnt == p->ticks) {
+        p->tick_cnt = 0;
+        if(p->alarm_trapframe == 0){
+          p->alarm_trapframe = kalloc();
+          memmove(p->alarm_trapframe, p->trapframe, sizeof(struct trapframe));
+          p->trapframe->epc = p->handler;
+        }
+      }
+    }
     yield();
+  }
 
   usertrapret();
 }

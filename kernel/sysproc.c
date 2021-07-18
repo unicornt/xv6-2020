@@ -41,14 +41,20 @@ sys_wait(void)
 uint64
 sys_sbrk(void)
 {
-  int addr;
+  int addr, naddr;
   int n;
 
   if(argint(0, &n) < 0)
     return -1;
   addr = myproc()->sz;
-  if(growproc(n) < 0)
-    return -1;
+  naddr = addr + n;
+  // printf("sbrk %d %d %d\n", addr, n, naddr);
+  if(naddr >= MAXVA)
+    return addr;
+  if(n < 0) {
+    myproc()->sz = uvmdealloc(myproc()->pagetable, addr, naddr);  
+  }
+  else myproc()->sz += n;
   return addr;
 }
 
@@ -70,6 +76,7 @@ sys_sleep(void)
     sleep(&ticks, &tickslock);
   }
   release(&tickslock);
+
   return 0;
 }
 
@@ -94,4 +101,35 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+
+uint64
+sys_sigalarm(void)
+{
+  int ticks;
+  uint64 handler;
+  struct proc* p;
+  
+  if(argint(0, &ticks) < 0)
+    return -1;
+  if(argaddr(1, &handler) < 0)
+    return -1;
+  
+  p = myproc();
+  p->ticks = ticks;
+  p->handler = handler;
+  p->tick_cnt = 0;
+  return 0;
+}
+
+
+uint64
+sys_sigreturn(void)
+{
+  struct proc *p = myproc();
+  
+  memmove(p->trapframe, p->alarm_trapframe, sizeof(struct trapframe));
+  p->alarm_trapframe = 0;
+  return 0;
 }
