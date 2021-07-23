@@ -108,3 +108,37 @@ pop_off(void)
   if(c->noff == 0 && c->intena)
     intr_on();
 }
+
+
+uint64 paindex(uint64 pa) {
+  return (pa - KERNBASE) / PGSIZE;
+}
+
+struct refcount refcnt;
+void addrefcnt(uint64 pa) {
+  // printf("addrefcnt in\n");
+  acquire(&refcnt.lk);
+  refcnt.count[paindex(pa)] ++;
+  release(&refcnt.lk);
+  // printf("addrefcnt out\n");
+}
+
+void delrefcnt(uint64 pa) {
+  acquire(&refcnt.lk);
+  refcnt.count[paindex(pa)] --;
+  release(&refcnt.lk);
+}
+
+int norefcnt(uint64 pa) {
+  return refcnt.count[paindex(pa)] == 0;
+}
+
+int onerefcnt(uint64 pa) {
+  return refcnt.count[paindex(pa)] == 1;
+}
+
+void clearrefcnt(uint64 pa) {
+  acquire(&refcnt.lk);
+  refcnt.count[paindex(pa)] = 1;
+  release(&refcnt.lk);
+}

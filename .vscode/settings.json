@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "types.h": "c",
+        "defs.h": "c",
+        "spinlock.h": "c",
+        "fs.h": "c"
+    }
+}

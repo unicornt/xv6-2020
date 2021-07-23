@@ -7,3 +7,8 @@ struct spinlock {
   struct cpu *cpu;   // The cpu holding the lock.
 };
 
+extern char end[];
+struct refcount {
+  struct spinlock lk;
+  uint count[128*1024*1024 / 4096];
+};

@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+
 
 /*
  * the kernel's page table.
@@ -21,8 +23,11 @@ extern char trampoline[]; // trampoline.S
 void
 kvminit()
 {
+  // printf("kvminit\n");
   kernel_pagetable = (pagetable_t) kalloc();
+  // printf("kvminit alloc finish %p\n", kernel_pagetable);
   memset(kernel_pagetable, 0, PGSIZE);
+  // printf("kvminit memset finish\n");
 
   // uart registers
   kvmmap(UART0, UART0, PGSIZE, PTE_R | PTE_W);
@@ -45,6 +50,7 @@ kvminit()
   // map the trampoline for trap entry/exit to
   // the highest virtual address in the kernel.
   kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  // printf("kvminit out\n");
 }
 
 // Switch h/w page table register to the kernel's page table,
@@ -153,6 +159,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 
   a = PGROUNDDOWN(va);
   last = PGROUNDDOWN(va + size - 1);
+  // printf("%p %p\n", a, last);
   for(;;){
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
@@ -311,7 +318,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -320,12 +326,15 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
+    if(mappages(new, i, PGSIZE, (uint64)pa, (flags | PTE_COW) & (~PTE_W)) != 0){
       goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+    }
+    addrefcnt(pa);
+    // printf("before uvmunmap\n");
+    uvmunmap(old, i, 1, 0);
+    // printf("after uvmunmap\n");
+    if(mappages(old, i, PGSIZE, (uint64)pa, (flags | PTE_COW) & (~PTE_W)) != 0){
+      panic("uvmcopy: map old pages error\n");
     }
   }
   return 0;
@@ -355,9 +364,19 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
+  pte_t *pte;
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    if(va0 >= MAXVA)
+      return -1;
+    pte = walk(pagetable, va0, 0);
+    if(pte == 0 || ((*pte) & PTE_V) == 0)
+      return -1;
+    if((*pte) & PTE_COW) {
+      if(cow_copy(pagetable, va0) == -1)
+        return -1;
+    }
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;

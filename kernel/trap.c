@@ -29,6 +29,35 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+int cow_copy(pagetable_t pagetable, uint64 va) {
+  pte_t *pte;
+  char *mem;
+  uint64 pa;
+  uint flags;
+
+  va = PGROUNDDOWN(va);
+  pte = walk(pagetable, va, 0);
+  pa = PTE2PA(*pte);
+  flags = PTE_FLAGS(*pte);
+  // printf("cow copy %d %d %d %d\n", pte, ((*pte) & PTE_V), ((*pte) & PTE_V), ((*pte) & PTE_U));
+  if(pte == 0 || ((*pte) & PTE_V) == 0 || ((*pte) & PTE_V) == 0 || ((*pte) & PTE_U) == 0)
+    return -1;
+  // printf("COW page fault\n");
+  // printf("%d : before alloc\n", cpuid());
+  mem = kalloc();
+  // printf("%d : after alloc\n", cpuid());
+  if(mem == 0) return -1;
+  memmove(mem, (char*)pa, PGSIZE);
+  uvmunmap(pagetable, va, 1, 0);
+  kfree((void*)pa);
+  if(mappages(pagetable, va, PGSIZE, (uint64)mem, ((flags) & (~PTE_COW)) | PTE_W) != 0) {
+    kfree(mem);
+    return -1;
+  }
+  // printf("COW page fault handle finish\n");
+  return 0;
+}
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -37,6 +66,7 @@ void
 usertrap(void)
 {
   int which_dev = 0;
+  uint64 va;
 
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
@@ -65,7 +95,12 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } else if(r_scause() == 15) {
+    va = r_stval();
+    if(cow_copy(p->pagetable, va) == -1){
+      p->killed = -1;
+    }
+  }else if((which_dev = devintr()) != 0){
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
