@@ -20,6 +20,7 @@ main()
     printf("xv6 kernel is booting\n");
     printf("\n");
     kinit();         // physical page allocator
+    printf("kinit\n");
     kvminit();       // create kernel page table
     kvminithart();   // turn on paging
     procinit();      // process table
@@ -38,6 +39,7 @@ main()
     userinit();      // first user process
     __sync_synchronize();
     started = 1;
+    printf("init finish\n");
   } else {
     while(started == 0)
       ;
