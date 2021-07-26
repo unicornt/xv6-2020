@@ -1765,6 +1765,7 @@ manywrites(char *s)
           }
           close(fd);
         }
+        // printf("%d %d\n", iters, howmany);
         unlink(name);
       }
 

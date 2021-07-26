@@ -97,17 +97,21 @@ test0()
   for(int i = 0; i < NCHILD; i++){
     dir[0] = '0' + i;
     mkdir(dir);
+    // printf("mkdir\n");
     if (chdir(dir) < 0) {
       printf("chdir failed\n");
       exit(1);
     }
     unlink(file);
+    // printf("unlink\n");
     createfile(file, N);
+    // printf("createfile\n");
     if (chdir("..") < 0) {
       printf("chdir failed\n");
       exit(1);
     }
   }
+  // printf("1\n");
   m = ntas(0);
   for(int i = 0; i < NCHILD; i++){
     dir[0] = '0' + i;
@@ -127,6 +131,7 @@ test0()
       exit(0);
     }
   }
+  // printf("2\n");
 
   for(int i = 0; i < NCHILD; i++){
     wait(0);
