@@ -295,19 +295,24 @@ sys_open(void)
   if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
     return -1;
 
+  // printf("%d :   open %s\n", cpuid(), path);
+
   begin_op();
 
   if(omode & O_CREATE){
+    // printf("%d :   open phrase ocreate %s\n", cpuid(), path);
     ip = create(path, T_FILE, 0, 0);
     if(ip == 0){
       end_op();
       return -1;
     }
   } else {
+    // printf("%d :   open phrase not ocreate %s\n", cpuid(), path);
     if((ip = namei(path)) == 0){
       end_op();
       return -1;
     }
+    // printf("%d :   open phrase not ocreate find ip %s\n", cpuid(), path);
     ilock(ip);
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
@@ -315,11 +320,42 @@ sys_open(void)
       return -1;
     }
   }
+  // printf("%d :   open phrase 1 %s\n", cpuid(), path);
 
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
     iunlockput(ip);
     end_op();
     return -1;
+  }
+  // printf("%d :   open phrase 2 %s\n", cpuid(), path);
+
+  if(!(omode & O_NOFOLLOW)){
+    int depth = 0;
+    while(ip->type == T_SYMLINK && depth < 10) {
+      // printf("%d\n", depth);
+      int len = 0;
+      readi(ip, 0, (uint64)&len, 0, sizeof(int));
+      if(len > MAXPATH)
+        panic("open: too long len of path");
+      readi(ip, 0, (uint64)path, sizeof(int), len);
+      iunlockput(ip);
+      if((ip = namei(path)) == 0){
+        end_op();
+        return -1;
+      }
+      ilock(ip);
+      if(ip->type == T_DIR && omode != O_RDONLY){
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+       depth++;
+    }
+    if(depth >= 10){
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
   }
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
@@ -347,7 +383,7 @@ sys_open(void)
 
   iunlock(ip);
   end_op();
-
+  // printf("%d :   sys open %s finish\n", cpuid(), path);
   return fd;
 }
 
@@ -482,5 +518,48 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+  struct file *f;
+  int fd;
+
+  if(argstr(0, target, MAXPATH) < 0)
+    return -1;
+  if(argstr(1, path, MAXPATH) < 0)
+    return - 1;
+  // printf("symlink %s %s\n", target, path);
+  begin_op();
+  if((ip = create(path, T_SYMLINK, 0, 0)) == 0){
+    end_op();
+    return -1;
+  }
+  if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
+    if(f)
+      fileclose(f);
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  f->type = FD_INODE;
+  f->ip = ip;
+  f->off = 0;
+  f->readable = 0;
+  f->writable = 0;
+
+  int len = strlen(target);
+  writei(ip, 0, (uint64)&len, 0, sizeof(int));
+  writei(ip, 0, (uint64)target, sizeof(int), len + 1);
+  iupdate(ip);
+  iunlockput(ip);
+
+  end_op();
+  // printf("symlink finish\n");
   return 0;
 }
