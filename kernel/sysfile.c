@@ -484,3 +484,59 @@ sys_pipe(void)
   }
   return 0;
 }
+
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  int length, offset, prot, flags, fd;
+  struct proc *p = myproc();
+  // assume addr always equal to 0.   need to decide the address 
+  // assume offset equal to 0.
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0 || argint(2, &prot) < 0 ||
+     argint(3, &flags) < 0 || argint(4, &fd) < 0 || argint(5, &offset) < 0)
+    return 0xffffffffffffffff;
+  if((prot & PROT_WRITE) && (p->ofile[fd]->writable == 0) && (flags & MAP_SHARED))
+    return 0xffffffffffffffff;
+  // printf("mmap %d %d %d %d %d %d\n", addr, length, prot, flags, fd, offset);
+  acquire(&p->lock);
+  if(addr == 0) {
+    addr = PGROUNDUP(p->sz);
+    // printf("find a address %p\n", addr);
+    // if(growproc(length) < 0)   // lazy allocate
+    //   return 0xffffffffffffffff;
+    p->sz = addr + length;
+  }
+  for(int i = 0; i < 16; i++){
+    if(p->vma[i].f == 0) {
+      struct vmarea *vma = &p->vma[i];
+      // get a empty slot
+      vma->f = filedup(p->ofile[fd]);
+      // printf("vma f %p\n", vma->f->ip);
+      vma->addr = addr;
+      vma->length = length;
+      vma->perm =prot;
+      vma->offset = offset;
+      break;
+    }
+    if(i == 15) {
+      // no empty slot
+      panic("no empty slot");
+    }
+  }
+  release(&p->lock);
+  // printf("mmap return %p\n", addr);
+  return addr;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  int length;
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0)
+    return -1;
+  printf("munmap %d %d\n", addr, length);
+  return 0;
+}

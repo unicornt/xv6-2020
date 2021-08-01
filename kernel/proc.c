@@ -113,6 +113,8 @@ allocproc(void)
 
 found:
   p->pid = allocpid();
+  for(int i = 0; i < 16; i++)
+    p->vma[i].f = 0;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){

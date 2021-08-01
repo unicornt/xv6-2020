@@ -224,6 +224,11 @@ UPROGS += \
 	$U/_bcachetest
 endif
 
+ifeq ($(LAB),mmap)
+UPROGS += \
+	$U/_mmaptest
+endif
+
 ifeq ($(LAB),fs)
 UPROGS += \
 	$U/_bigfile
