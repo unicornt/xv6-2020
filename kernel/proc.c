@@ -113,8 +113,6 @@ allocproc(void)
 
 found:
   p->pid = allocpid();
-  for(int i = 0; i < 16; i++)
-    p->vma[i].f = 0;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -135,6 +133,11 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  for(int i = 0; i < 16; i++){
+    initlock(&p->vma[i].lock, "vma");
+    p->vma[i].f = 0;
+  }
 
   return p;
 }
@@ -298,6 +301,19 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  struct vmarea *vma = 0, *vmai = 0;
+  for(vma = p->vma, vmai = np->vma; vma < p->vma + 16; vma++, vmai++){
+    if(vma->f != 0){
+      initlock(&vmai ->lock, "vma");
+      vmai->f = filedup(vma->f);
+      vmai->addr = vma->addr;
+      vmai->length = vma->length;
+      vmai->offset = vma->offset;
+      vmai->perm = vma->perm;
+      vmai->flags = vma->flags;
+    }
+  }
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -341,10 +357,19 @@ reparent(struct proc *p)
 void
 exit(int status)
 {
+  // printf("exit\n");
   struct proc *p = myproc();
 
   if(p == initproc)
     panic("init exiting");
+
+  // munmap all map region
+  struct vmarea *vma = 0;
+  for(vma = p->vma; vma < p->vma + 16; vma++){
+    if(vma->f != 0){
+      munmap(vma->addr, vma->length);
+    }
+  }
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
@@ -395,6 +420,8 @@ exit(int status)
   p->state = ZOMBIE;
 
   release(&original_parent->lock);
+
+  // printf("exit finish\n");
 
   // Jump into the scheduler, never to return.
   sched();

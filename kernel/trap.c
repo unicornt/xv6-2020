@@ -75,18 +75,25 @@ usertrap(void)
     uint64 va = r_stval();
     struct vmarea *vma = 0;
     for(vma = p->vma; vma < p->vma + 16; vma++){
+      acquire(&vma->lock);
       if(vma->f != 0){
         if(vma->addr <= va && va < vma->addr + vma->length){
+          // printf("trap get %d\n", vma - p->vma);
           break;
         }
       }
+      release(&vma->lock);
     }
-    if(vma == p->vma + 16)
+    if(vma == p->vma + 16){
+      // printf("no found\n");
       goto fail;
+    }
     uint64 pva = PGROUNDDOWN(va);
     char *mem = kalloc();
-    if(mem == 0)
+    if(mem == 0){
+      release(&vma->lock);
       goto fail;
+    }
     memset(mem, 0, PGSIZE);
     int perm = PTE_U;
     if(vma->perm & PROT_READ)
@@ -97,12 +104,19 @@ usertrap(void)
       perm |= PTE_X;
     if(mappages(p->pagetable, pva, PGSIZE, (uint64)mem, perm) != 0){
       kfree(mem);
+      release(&vma->lock);
       goto fail;
     }
-    // printf("trap vma ip %p %p ref = %d\n", vma->f->ip, va, vma->f->ip->ref);
-    ilock(vma->f->ip);
-    readi(vma->f->ip, 1, pva, vma->offset + pva - vma->addr, PGSIZE);
-    iunlock(vma->f->ip);
+    struct file *fi = vma->f;
+    int offset = vma->offset;
+    int addr = vma->addr;
+    // printf("trap vma ip %p %p ref = %d offset = %p\n", vma->f->ip, va, vma->f->ip->ref, offset);
+    release(&vma->lock);
+    begin_op();
+    ilock(fi->ip);
+    readi(fi->ip, 1, va, offset + va - addr, PGSIZE);
+    iunlock(fi->ip);
+    end_op();
   } else {
   fail:
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);

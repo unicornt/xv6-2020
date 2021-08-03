@@ -500,15 +500,17 @@ sys_mmap(void)
   if((prot & PROT_WRITE) && (p->ofile[fd]->writable == 0) && (flags & MAP_SHARED))
     return 0xffffffffffffffff;
   // printf("mmap %d %d %d %d %d %d\n", addr, length, prot, flags, fd, offset);
-  acquire(&p->lock);
   if(addr == 0) {
+    acquire(&p->lock);
     addr = PGROUNDUP(p->sz);
     // printf("find a address %p\n", addr);
     // if(growproc(length) < 0)   // lazy allocate
     //   return 0xffffffffffffffff;
     p->sz = addr + length;
+    release(&p->lock);
   }
   for(int i = 0; i < 16; i++){
+    acquire(&p->vma[i].lock);
     if(p->vma[i].f == 0) {
       struct vmarea *vma = &p->vma[i];
       // get a empty slot
@@ -518,14 +520,17 @@ sys_mmap(void)
       vma->length = length;
       vma->perm =prot;
       vma->offset = offset;
+      vma->flags = flags;
+      // printf("get id : %d  offset = %p\n", i, vma->offset);
+      release(&p->vma[i].lock);
       break;
     }
+    release(&p->vma[i].lock);
     if(i == 15) {
       // no empty slot
       panic("no empty slot");
     }
   }
-  release(&p->lock);
   // printf("mmap return %p\n", addr);
   return addr;
 }
@@ -537,6 +542,98 @@ sys_munmap(void)
   int length;
   if(argaddr(0, &addr) < 0 || argint(1, &length) < 0)
     return -1;
-  printf("munmap %d %d\n", addr, length);
-  return 0;
+  // printf("munmap %p %p\n", addr, length);
+  return munmap(addr, length);
+}
+
+uint64
+munmap(uint64 addr, int length)
+{
+  struct proc *p = myproc();
+  struct vmarea *vma = 0, *vmai = 0;
+  int cnt = 0;
+  for(vma = p->vma; vma < p->vma + 16; vma++){
+    // printf("acquire %d\n", vma-p->vma);
+    acquire(&vma->lock);
+    if(vma->f != 0){
+      int delete = 0;
+      uint64 L = vma->addr;
+      if(addr > L)
+        L = addr;
+      uint64 R = vma->addr + vma->length;
+      if(addr + length < R)
+        R = addr + length;
+      if(L >= R){
+        release(&vma->lock);
+        continue;
+      }
+      cnt += PGROUNDUP(R - L) / PGSIZE;
+      // printf("deal with %p %p in %p %p\n", L, R, vma->addr, vma->addr + vma->length);
+      if(L == vma->addr && R == vma->addr + vma->length){
+        // delete
+        // printf("delete %d\n", vma-p->vma);
+        delete = 1;
+      }
+      else if(L == vma->addr){
+        vma->addr = R;
+        vma->offset += R - L;
+        vma->length -= R - L;
+      }
+      else if(R == vma->addr + length){
+        vma->length = L - vma->addr;
+      }
+      else{
+        // split to two vma
+        // printf("split\n");
+        for(vmai = p->vma; vmai < p->vma + 16; vmai ++){
+          if(vmai == vma) continue;
+          acquire(&vmai->lock);
+          if(vmai->f == 0){
+            vmai = vma;
+            vmai->addr = R;
+            vmai->length = vma->length - (R - vma->addr);
+            vmai->offset += R - vma->addr;
+            release(&vmai->lock);
+            break;
+          }
+          release(&vmai->lock);
+        }
+        vma->length = L - vma->addr;
+      }
+      if(vma->flags & MAP_SHARED){
+        for(uint64 i = PGROUNDDOWN(L); i < R; i += PGSIZE){
+          pte_t *pte = walk(p->pagetable, i, 0);
+          if(pte == 0)
+            continue;
+          if((*pte) & PTE_D){
+            // printf("before filewrite %d\n", vma->f->ip->type);
+            struct file *fi = vma->f;
+            release(&vma->lock);
+            begin_op();
+            ilock(fi->ip);
+            int r = 0;
+            if ((r = writei(fi->ip, 1, L, fi->off, R - L)) > 0){
+              fi->off += r;
+              // printf("write %d\n", r);
+            }
+            iunlock(fi->ip);
+            end_op();
+            acquire(&vma->lock);
+            // printf("after filewrite\n");
+          }
+          if((*pte) & PTE_V)
+            uvmunmap(p->pagetable, i, 1, 1);
+        }
+      }
+      if(delete){
+        // printf("delete %p %p\n", vma->addr, vma->addr + vma->length);
+        vma->f = 0;
+        vma->addr = 0;
+        vma->length = 0;
+      }
+    }
+    release(&vma->lock);
+  }
+  // printf("munmap return\n");
+  return cnt == (PGROUNDUP(length) / PGSIZE);
 }

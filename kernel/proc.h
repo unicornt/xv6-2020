@@ -82,9 +82,10 @@ struct trapframe {
 
 struct vmarea {
   // f == 0 declares invalid
+  struct spinlock lock;
   struct file* f;
   uint64 addr;
-  int perm, length, offset;
+  int perm, length, offset, flags;
 };
 
 enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
